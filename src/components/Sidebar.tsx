@@ -1,4 +1,3 @@
-import { PATH_COLOR } from '../lib/colors'
 import { duration, KIND_LABEL, latLon, utcDateLong, utcTime } from '../lib/format'
 import { useStore } from '../store'
 import CityList from './CityList'
@@ -55,20 +54,20 @@ function Overview() {
 
 function Legend() {
   const e = useStore((s) => s.selected)
-  const color = e ? PATH_COLOR[e.kind] : PATH_COLOR.T
+  const kind = e?.kind ?? 'T'
   return (
     <ul className="legend">
       <li>
-        <span className="swatch" style={{ background: color, opacity: 0.6 }} /> Path of {e?.kind === 'A' ? 'annularity' : 'totality'}
+        <span className={`swatch swatch--${kind}`} /> Path of {kind === 'A' ? 'annularity' : 'totality'}
       </li>
       <li>
-        <span className="swatch swatch--line" style={{ borderColor: 'var(--partial)' }} /> Partial eclipse visible
+        <span className="swatch swatch--zone" /> Partial eclipse visible
       </li>
       <li>
-        <span className="swatch swatch--dots" /> Magnitude 0.2 – 0.8
+        <span className="swatch swatch--iso" /> Magnitude 0.2 – 0.8
       </li>
       <li>
-        <span className="swatch" style={{ background: '#05060d' }} /> Moon’s shadow (live)
+        <span className="swatch swatch--shadow" /> Moon’s shadow (live)
       </li>
     </ul>
   )
@@ -79,8 +78,8 @@ export default function Sidebar() {
     <aside className="sidebar">
       <header className="brand">
         <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true">
-          <circle cx="16" cy="16" r="13" fill="#ffb347" />
-          <circle cx="19" cy="14" r="12" fill="var(--bg)" />
+          <circle className="brand__sun" cx="16" cy="16" r="13" />
+          <circle className="brand__moon" cx="19" cy="14" r="12" />
         </svg>
         <h1>Eclipse Tracker</h1>
       </header>

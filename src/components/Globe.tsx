@@ -1,5 +1,5 @@
 import * as maplibregl from 'maplibre-gl'
-import type { GeoJSONSource, Map as MLMap } from 'maplibre-gl'
+import type { ExpressionSpecification, GeoJSONSource, Map as MLMap } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 // Bundle MapLibre's tile worker (and its shared chunk) as a proper worker entry.
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url'
@@ -7,16 +7,14 @@ import { useEffect, useRef } from 'react'
 import type { EclipseSummary } from '../astro/catalog'
 import { normLon } from '../astro/earth'
 import { shadowCenter, shadowOutline, terminator } from '../astro/shadow'
-import { PARTIAL_COLOR, PATH_COLOR } from '../lib/colors'
 import type { EclipseGeometry } from '../lib/geometry'
+import { onColorSchemeChange, readMapTheme, type MapTheme } from '../lib/theme'
 import { useStore } from '../store'
 
 maplibregl.setWorkerUrl(maplibreWorkerUrl)
 
 type FC = GeoJSON.FeatureCollection
 const empty: FC = { type: 'FeatureCollection', features: [] }
-const STYLE = 'https://tiles.openfreemap.org/styles/liberty'
-
 
 const SOURCES = ['zone', 'zone-lines', 'path', 'limits', 'central', 'greatest', 'cities', 'penumbra', 'umbra', 'terminator', 'axis'] as const
 
@@ -29,21 +27,29 @@ const line = (coordinates: number[][], properties: GeoJSON.GeoJsonProperties = {
   geometry: { type: 'LineString', coordinates },
 })
 
-function addLayers(map: MLMap) {
+/** Color by the feature's eclipse kind ('T' | 'A' | 'H'). */
+function kindColor(th: MapTheme): ExpressionSpecification {
+  return ['match', ['get', 'kind'], 'T', th.total, 'A', th.annular, th.hybrid]
+}
+
+function addLayers(map: MLMap, th: MapTheme) {
   for (const id of SOURCES) map.addSource(id, { type: 'geojson', data: empty })
   // Draw fills and lines beneath the base map's labels.
   const beforeId = map.getStyle().layers.find((l) => l.type === 'symbol')?.id
+  const font = [th.font]
 
-  map.addLayer({ id: 'zone-fill', type: 'fill', source: 'zone', paint: { 'fill-color': PARTIAL_COLOR, 'fill-opacity': 0.08 } }, beforeId)
-  map.addLayer({ id: 'penumbra-fill', type: 'fill', source: 'penumbra', paint: { 'fill-color': '#0a0d1a', 'fill-opacity': 0.28 } }, beforeId)
-  map.addLayer({ id: 'penumbra-line', type: 'line', source: 'penumbra', paint: { 'line-color': '#1b2240', 'line-width': 1, 'line-opacity': 0.6 } }, beforeId)
+  map.addLayer({ id: 'zone-fill', type: 'fill', source: 'zone', paint: { 'fill-color': th.partial, 'fill-opacity': th.zoneOpacity } }, beforeId)
+  map.addLayer(
+    { id: 'penumbra-fill', type: 'fill', source: 'penumbra', paint: { 'fill-color': th.penumbra, 'fill-opacity': th.penumbraOpacity } },
+    beforeId,
+  )
   map.addLayer(
     {
       id: 'zone-outline',
       type: 'line',
       source: 'zone-lines',
       filter: ['==', ['get', 'kind'], 'outline'],
-      paint: { 'line-color': PARTIAL_COLOR, 'line-width': 2.2, 'line-opacity': 1 },
+      paint: { 'line-color': th.partial, 'line-width': th.zoneLineWidth },
     },
     beforeId,
   )
@@ -53,28 +59,36 @@ function addLayers(map: MLMap) {
       type: 'line',
       source: 'zone-lines',
       filter: ['==', ['get', 'kind'], 'iso'],
-      paint: { 'line-color': PARTIAL_COLOR, 'line-width': 2, 'line-dasharray': [1, 2], 'line-opacity': 0.95 },
+      paint: { 'line-color': th.partial, 'line-width': th.isolineWidth, 'line-dasharray': [1, 2] },
     },
     beforeId,
   )
-  map.addLayer({ id: 'path-fill', type: 'fill', source: 'path', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.28, 'fill-antialias': false } }, beforeId)
-  map.addLayer({ id: 'limits', type: 'line', source: 'limits', paint: { 'line-color': ['get', 'color'], 'line-width': 2.2 } }, beforeId)
+  map.addLayer(
+    {
+      id: 'path-fill',
+      type: 'fill',
+      source: 'path',
+      paint: { 'fill-color': kindColor(th), 'fill-opacity': th.pathOpacity, 'fill-antialias': false },
+    },
+    beforeId,
+  )
+  map.addLayer({ id: 'limits', type: 'line', source: 'limits', paint: { 'line-color': kindColor(th), 'line-width': th.limitWidth } }, beforeId)
   map.addLayer(
     {
       id: 'central',
       type: 'line',
       source: 'central',
-      paint: { 'line-color': ['get', 'color'], 'line-width': 1.4, 'line-dasharray': [4, 3], 'line-opacity': 0.9 },
+      paint: { 'line-color': kindColor(th), 'line-width': th.centralWidth, 'line-dasharray': [4, 3] },
     },
     beforeId,
   )
-  map.addLayer({ id: 'umbra-fill', type: 'fill', source: 'umbra', paint: { 'fill-color': '#05060d', 'fill-opacity': 0.75 } }, beforeId)
+  map.addLayer({ id: 'umbra-fill', type: 'fill', source: 'umbra', paint: { 'fill-color': th.umbra, 'fill-opacity': th.umbraOpacity } }, beforeId)
   map.addLayer(
     {
       id: 'terminator',
       type: 'line',
       source: 'terminator',
-      paint: { 'line-color': '#ffd27a', 'line-width': 1, 'line-opacity': 0.55, 'line-dasharray': [2, 2] },
+      paint: { 'line-color': th.terminator, 'line-width': 1, 'line-dasharray': [2, 2] },
     },
     beforeId,
   )
@@ -85,31 +99,20 @@ function addLayers(map: MLMap) {
     type: 'symbol',
     source: 'zone-lines',
     filter: ['==', ['get', 'kind'], 'iso'],
-    layout: {
-      'symbol-placement': 'line',
-      'symbol-spacing': 350,
-      'text-field': ['get', 'label'],
-      'text-font': ['Noto Sans Regular'],
-      'text-size': 12,
-    },
-    paint: { 'text-color': '#ffffff', 'text-halo-color': PARTIAL_COLOR, 'text-halo-width': 1.5 },
+    layout: { 'symbol-placement': 'line', 'symbol-spacing': 350, 'text-field': ['get', 'label'], 'text-font': font, 'text-size': 12 },
+    paint: { 'text-color': th.partial, 'text-halo-color': th.labelHalo, 'text-halo-width': 1.5 },
   })
   map.addLayer({
     id: 'axis',
     type: 'circle',
     source: 'axis',
-    paint: { 'circle-radius': 4, 'circle-color': '#ffffff', 'circle-stroke-color': '#05060d', 'circle-stroke-width': 2 },
+    paint: { 'circle-radius': 4, 'circle-color': th.marker, 'circle-stroke-color': th.markerStroke, 'circle-stroke-width': 2 },
   })
   map.addLayer({
     id: 'greatest',
     type: 'circle',
     source: 'greatest',
-    paint: {
-      'circle-radius': 7,
-      'circle-color': 'rgba(0,0,0,0)',
-      'circle-stroke-color': '#ffe08a',
-      'circle-stroke-width': 2.5,
-    },
+    paint: { 'circle-radius': 7, 'circle-color': 'rgba(0,0,0,0)', 'circle-stroke-color': th.greatest, 'circle-stroke-width': 2.5 },
   })
   map.addLayer({
     id: 'greatest-label',
@@ -117,32 +120,26 @@ function addLayers(map: MLMap) {
     source: 'greatest',
     layout: {
       'text-field': 'Greatest eclipse',
-      'text-font': ['Noto Sans Bold'],
+      'text-font': font,
       'text-size': 11,
       'text-offset': [0, -1.4],
       'text-anchor': 'bottom',
       'text-allow-overlap': true,
     },
-    paint: { 'text-color': '#ffe08a', 'text-halo-color': '#0b0f1a', 'text-halo-width': 1.6 },
+    paint: { 'text-color': th.greatest, 'text-halo-color': th.labelHalo, 'text-halo-width': 1.6 },
   })
   map.addLayer({
     id: 'cities',
     type: 'circle',
     source: 'cities',
-    paint: { 'circle-radius': 5, 'circle-color': '#ffffff', 'circle-stroke-color': '#0b0f1a', 'circle-stroke-width': 2 },
+    paint: { 'circle-radius': 5, 'circle-color': th.marker, 'circle-stroke-color': th.markerStroke, 'circle-stroke-width': 2 },
   })
   map.addLayer({
     id: 'city-labels',
     type: 'symbol',
     source: 'cities',
-    layout: {
-      'text-field': ['get', 'name'],
-      'text-font': ['Noto Sans Bold'],
-      'text-size': 12,
-      'text-offset': [0, 1.1],
-      'text-anchor': 'top',
-    },
-    paint: { 'text-color': '#ffffff', 'text-halo-color': '#0b0f1a', 'text-halo-width': 1.6 },
+    layout: { 'text-field': ['get', 'name'], 'text-font': font, 'text-size': 12, 'text-offset': [0, 1.1], 'text-anchor': 'top' },
+    paint: { 'text-color': th.label, 'text-halo-color': th.labelHalo, 'text-halo-width': 1.6 },
   })
 }
 
@@ -151,7 +148,7 @@ function setData(map: MLMap, id: (typeof SOURCES)[number], data: FC) {
 }
 
 function renderEclipse(map: MLMap, e: EclipseSummary | null, g: EclipseGeometry | null) {
-  const color = e ? PATH_COLOR[e.kind] : '#fff'
+  const kind = e?.kind ?? 'T'
   setData(
     map,
     'greatest',
@@ -188,10 +185,10 @@ function renderEclipse(map: MLMap, e: EclipseSummary | null, g: EclipseGeometry 
   setData(
     map,
     'path',
-    fc([{ type: 'Feature', properties: { color }, geometry: { type: 'MultiPolygon', coordinates: g.polygons.map((ring) => [ring]) } }]),
+    fc([{ type: 'Feature', properties: { kind }, geometry: { type: 'MultiPolygon', coordinates: g.polygons.map((ring) => [ring]) } }]),
   )
-  setData(map, 'limits', fc([...g.north, ...g.south].map((l) => line(l, { color }))))
-  setData(map, 'central', fc(g.central.map((s) => line(s.coords, { color: PATH_COLOR[s.kind] }))))
+  setData(map, 'limits', fc([...g.north, ...g.south].map((l) => line(l, { kind }))))
+  setData(map, 'central', fc(g.central.map((s) => line(s.coords, { kind: s.kind }))))
 }
 
 function renderShadow(map: MLMap, e: EclipseSummary | null, t: number) {
@@ -216,9 +213,10 @@ export default function Globe() {
   const container = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    let theme = readMapTheme()
     const map = new maplibregl.Map({
       container: container.current!,
-      style: STYLE,
+      style: theme.style,
       center: [0, 20],
       zoom: 1.4,
       attributionControl: { compact: true },
@@ -228,21 +226,30 @@ export default function Globe() {
 
     if (import.meta.env.DEV) (window as unknown as { __map: MLMap }).__map = map
     let ready = false
-    const pinMarker = new maplibregl.Marker({ color: '#ffe08a' })
+    const pinEl = document.createElement('div')
+    pinEl.className = 'pin-marker'
+    const pinMarker = new maplibregl.Marker({ element: pinEl })
 
+    // Fires on first load and after every setStyle (e.g. a light/dark switch).
     map.on('style.load', () => {
       map.setProjection({ type: 'globe' })
       map.setSky({
-        'sky-color': '#0b1026',
-        'horizon-color': '#27406b',
-        'fog-color': '#0b1026',
+        'sky-color': theme.sky,
+        'horizon-color': theme.horizon,
+        'fog-color': theme.sky,
         'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 5, 1, 7, 0],
       })
-      addLayers(map)
+      addLayers(map, theme)
       ready = true
       const s = useStore.getState()
       renderEclipse(map, s.selected, s.geometry)
       renderShadow(map, s.selected, s.t)
+    })
+
+    const offScheme = onColorSchemeChange(() => {
+      theme = readMapTheme()
+      ready = false
+      map.setStyle(theme.style, { diff: false })
     })
 
     map.on('click', (ev) => {
@@ -273,6 +280,7 @@ export default function Globe() {
 
     return () => {
       unsub()
+      offScheme()
       map.remove()
     }
   }, [])
